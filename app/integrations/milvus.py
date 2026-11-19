@@ -1,4 +1,4 @@
-"""Milvus / LangChain VectorStore 工厂。"""
+"""Milvus / LangChain VectorStore factory."""
 
 from __future__ import annotations
 
@@ -12,11 +12,7 @@ from app.core.config import Settings, get_settings
 
 
 def ensure_no_proxy_for_url(url: str) -> None:
-    """让内网 Milvus gRPC 绕过系统 HTTP 代理。
-
-    gRPC 在部分 Windows 环境中会复用 HTTP_PROXY。若 192.168.100.128 未列入
-    NO_PROXY，pymilvus 会错误地尝试连接本地代理端口并报服务不可用。
-    """
+    """Make intranet Milvus gRPC bypass an accidentally inherited HTTP proxy."""
 
     host = urlparse(url).hostname
     if not host:
@@ -32,8 +28,9 @@ def create_vector_store(
     embedding_function: Embeddings,
     *,
     settings: Settings | None = None,
+    collection_name: str | None = None,
 ) -> Milvus:
-    """创建 Milvus VectorStore；连接参数全部来自统一配置。"""
+    """Create the Milvus VectorStore with a stable schema and HNSW index."""
 
     config = settings or get_settings()
     ensure_no_proxy_for_url(config.milvus_uri)
@@ -43,11 +40,20 @@ def create_vector_store(
         connection_args["token"] = token
     return Milvus(
         embedding_function=embedding_function,
-        collection_name=config.milvus_collection,
+        collection_name=collection_name or config.milvus_collection,
         connection_args=connection_args,
         index_params={
             "metric_type": config.milvus_metric_type,
             "index_type": "HNSW",
             "params": {"M": 16, "efConstruction": 200},
         },
+        search_params={
+            "metric_type": config.milvus_metric_type,
+            "params": {"ef": 64},
+        },
+        auto_id=False,
+        primary_field="pk",
+        text_field="text",
+        vector_field="vector",
+        enable_dynamic_field=True,
     )

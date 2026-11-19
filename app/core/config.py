@@ -45,6 +45,7 @@ class Settings(BaseSettings):
     milvus_search_timeout_seconds: float = Field(default=5.0, gt=0)
 
     redis_url: str = "redis://127.0.0.1:6379/1"
+    checkpointer_backend: Literal["redis", "memory"] = "redis"
     redis_socket_timeout_seconds: float = Field(default=3.0, gt=0)
     checkpoint_key_prefix: str = "langgraph:checkpoint:"
     checkpoint_ttl_seconds: int = Field(default=604800, gt=0)
@@ -105,6 +106,8 @@ class Settings(BaseSettings):
     def validate_time_budget(self) -> Settings:
         if self.chat_total_timeout_seconds >= 30:
             raise ValueError("CHAT_TOTAL_TIMEOUT_SECONDS 必须小于 Java 侧 30 秒预算")
+        if self.app_env == "production" and self.checkpointer_backend == "memory":
+            raise ValueError("生产环境不允许使用内存 checkpointer")
         return self
 
 
@@ -113,3 +116,5 @@ def get_settings() -> Settings:
     """Return the process-level settings singleton."""
 
     return Settings()
+
+
