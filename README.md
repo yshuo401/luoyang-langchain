@@ -97,7 +97,7 @@ ai-service/
 │  │  └─ internal_index.py        # /internal/v1/ai/index/**
 │  ├─ core/
 │  │  ├─ config.py                # pydantic-settings 环境变量解析
-│  │  ├─ logging.py               # 基础日志；M6 增加结构化、requestId、脱敏和耗时
+│  │  ├─ logging.py               # 结构化 JSON 日志、requestId/threadId、脱敏和耗时
 │  │  ├─ security.py              # HMAC、时间窗、常量时间比较、重放防护
 │  │  ├─ errors.py                # 内部错误码、异常映射、脱敏信封
 │  │  └─ constants.py             # 工具预算、角色、来源类型等常量
@@ -167,7 +167,7 @@ ai-service/
 
 ### 5.2 初始化后运行
 
-当前工作区已执行过初始化：`pyproject.toml`、`uv.lock`、`.python-version`、`.venv`、`.env` 和 `app/` 骨架均已存在。新克隆仓库时执行：
+当前工作区已完成初始化并落地 RAG/Agent 代码：`pyproject.toml`、`uv.lock`、`.python-version`、`.venv`、`.env` 和 `app/` 均存在。新克隆仓库时执行：
 
 ```powershell
 cd D:\luoyang-smart-tourism\ai-service
@@ -317,7 +317,7 @@ EMBEDDING_BATCH_SIZE=16
 - `QWEN_EMBEDDING_DIM` 已用真实调用验证为 `1024`，且必须与 Milvus collection 的 `dim` 一致；换 embedding 模型必须重建 collection，不得混写。
 - `RAG_MIN_SCORE` 必须用本地 30–50 条问题评估后校准；未校准前不得直接上线。
 - `REDIS_URL` 使用独立 database 或前缀，避免和 Java 缓存、刷新令牌、限流 key 冲突。
-- Redis 服务器必须满足 `RedisSaver` 的 RedisJSON/RediSearch 前置条件；当前 VM Redis 7.0.15 不满足，M7 前必须升级。
+- Redis 服务器必须满足 `RedisSaver` 的 RedisJSON/RediSearch 前置条件；当前 VM Redis 7.0.15 不满足，正式多轮演示前必须升级到 Redis 8.x。
 - 运行 `uv run python -m app.scripts.check_redis_checkpointer`；只有输出 `checkpointer: READY` 才能进入多轮 Agent 验收。
 - `CHECKPOINT_TTL_SECONDS` 与 Java 会话保留策略保持一致。
 - `MODEL_MAX_CONCURRENCY` 是模型并发上限；超过上限时短等待后返回可重试错误，不无限排队。
@@ -757,3 +757,15 @@ AI 服务应按 fail-closed 处理多轮会话，不要把缺少 checkpoint 误�
 - [开发规范](../docs/development/DEVELOPMENT-STANDARD.md)
 - [实施路线图](../docs/roadmap/IMPLEMENTATION-ROADMAP.md)
 - [部署说明](../deploy/README.md)
+
+
+## 17. 已实现模块与提交边界
+
+当前代码按以下模块落地，新增功能应继续遵守“一次性只改一个边界”的原则：
+
+1. `core` / `schemas`：统一 camelCase 契约、错误信封、结构化日志、HMAC 与重放保护。
+2. `rag` / `ingestion`：PDF/DOCX/Markdown/TXT 解析、中文切分、Milvus 向量写入/删除、索引任务幂等。
+3. `chains` / `prompts`：阈值检索、`create_retrieval_chain`、引用校验、资料不足降级。
+4. `agents` / `tools`：`create_agent`、六个白名单工具、请求级证据与工具预算。
+5. `memory` / `services`：Redis/InMemory checkpointer、`threadId` 对齐、结果缓存、聊天编排。
+6. `api`：聊天、checkpoint reset、索引提交/查询/删除和 health 路由。
