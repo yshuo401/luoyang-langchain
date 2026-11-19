@@ -10,10 +10,13 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
 from app.api.health import router as health_router
+from app.api.internal_chat import router as internal_chat_router
+from app.api.internal_index import router as internal_index_router
 from app.core.config import get_settings
 from app.core.constants import REQUEST_ID_HEADER, SERVICE_VERSION
 from app.core.errors import ServiceError
 from app.core.logging import configure_logging, get_logger
+from app.runtime import ApplicationRuntime, build_runtime
 from app.schemas.common import ApiEnvelope
 
 logger = get_logger(__name__)
@@ -24,10 +27,22 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     settings = get_settings()
     app.state.settings = settings
     configure_logging(settings.log_level)
+    runtime: ApplicationRuntime | None = None
+    app.state.index_service = None
+    app.state.chat_service = None
+    try:
+        runtime = await build_runtime(settings)
+        app.state.runtime = runtime
+        app.state.index_service = runtime.index_service
+        app.state.chat_service = runtime.chat_service
+    except Exception:
+        logger.exception("runtime_initialization_failed")
     logger.info("service_started", extra={"event": "service_started"})
     try:
         yield
     finally:
+        if runtime is not None:
+            await runtime.close()
         logger.info("service_stopped", extra={"event": "service_stopped"})
 
 
@@ -83,8 +98,9 @@ def create_app() -> FastAPI:
         return JSONResponse(status_code=500, content=payload.model_dump(by_alias=True))
 
     app.include_router(health_router)
+    app.include_router(internal_chat_router)
+    app.include_router(internal_index_router)
     return app
 
 
 app = create_app()
-

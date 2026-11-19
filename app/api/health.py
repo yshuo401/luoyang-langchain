@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 from pymilvus import MilvusClient
 from redis.asyncio import Redis
@@ -47,11 +47,11 @@ def _check_milvus(settings: Settings) -> bool:
 
 
 @router.get("/health/ready", response_model=ReadyResponse, summary="依赖就绪检查")
-async def ready() -> ReadyResponse | JSONResponse:
-    """检查 Redis 与 Milvus；任一不可用时返回 503，不检查模型外网。"""
+async def ready(request: Request) -> ReadyResponse | JSONResponse:
+    """检查 Redis、Milvus 与 Agent checkpointer；任一不可用时返回 503。"""
 
     settings = get_settings()
-    checks: dict[str, bool] = {"redis": False, "milvus": False}
+    checks: dict[str, bool] = {"redis": False, "milvus": False, "checkpointer": False}
     try:
         checks["redis"] = await _check_redis(settings)
     except Exception:
@@ -64,8 +64,12 @@ async def ready() -> ReadyResponse | JSONResponse:
     except Exception:
         checks["milvus"] = False
 
+    runtime = getattr(request.app.state, "runtime", None)
+    checks["checkpointer"] = bool(runtime is not None and runtime.agent is not None)
     all_ready = all(checks.values())
     payload = ReadyResponse(status="ready" if all_ready else "not_ready", checks=checks)
     if not all_ready:
         return JSONResponse(status_code=503, content=payload.model_dump())
     return payload
+
+

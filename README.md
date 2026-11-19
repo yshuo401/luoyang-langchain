@@ -1,7 +1,7 @@
 # AI 服务（`ai-service/`）
 
-> 状态：M0 工程骨架已初始化并验证（2026-11-18）：FastAPI、Redis/Milvus 基础 readiness、Qwen Chat/Embedding 真实冒烟（含图片输入）、`create_agent` 工具调用和 LangChain API 导入均通过。
-> **待完成基础设施**：当前 VM Redis 7.0.15 没有 RedisJSON/RediSearch，`RedisSaver.setup()` 实际会报 `unknown command 'FT.INFO'`；M7 前必须升级到 Redis 8.x，不能把 `PING` 当作 checkpointer 就绪。
+> 状态：M6–M7 核心实现已完成（2026-11-19）：知识解析/切分/Milvus 索引、阈值 RAG、`create_retrieval_chain`、`create_agent` 工具编排、请求级证据登记、引用校验、Redis/InMemory checkpointer、HMAC 内部接口和资料不足降级均已落地并通过自动测试。
+> **基础设施门禁**：当前 VM Redis 7.0.15 没有 RedisJSON/RediSearch，正式 `RedisSaver.setup()` 仍会报 `unknown command 'FT.INFO'`；演示多轮对话必须升级到 Redis 8.x。仅在单进程本地调试时，可显式设置 `CHECKPOINTER_BACKEND=memory` 使用官方 `InMemorySaver`，该模式禁止用于生产。
 > 技术栈：Python 3.14.2 + uv 0.13.7、FastAPI、Pydantic v2、LangChain、LangGraph、Milvus、Redis checkpointer、阿里云千问（Qwen）。
 > 本地监听：`127.0.0.1:8000`，**只允许 Spring Boot 内网调用**。
 > 系统角色：旅游知识 RAG、工具型 Agent 编排、短期记忆、来源追溯和“资料不足”降级；不是第二业务后端。
@@ -183,7 +183,18 @@ uv run python -m app.scripts.check_redis_checkpointer
 uv run uvicorn app.main:app --host 127.0.0.1 --port 8000 --reload
 ```
 
-当前骨架只注册 `/health/live`、`/health/ready`、`/docs` 和 `/openapi.json`；`/internal/v1/ai/**` 按 M6/M7 里程碑再实现，禁止提前用假响应占用正式路径。
+当前已注册的正式路由：
+
+- `POST /internal/v1/ai/chat`
+- `POST /internal/v1/ai/checkpoints/{threadId}/reset`
+- `POST /internal/v1/ai/index/jobs`
+- `GET /internal/v1/ai/index/jobs/{jobId}`
+- `POST /internal/v1/ai/index/documents/{documentId}/delete`
+- `GET /health/live`
+- `GET /health/ready`
+- `GET /docs`、`GET /openapi.json`
+
+所有 `/internal/v1/ai/**` 路由均要求 HMAC-SHA256、时间窗和请求 ID，不能通过 Nginx 暴露。
 
 > **Redis 版本门禁**：`langgraph-checkpoint-redis 0.6.0` 依赖 RedisJSON 和 RediSearch。当前 VM Redis 7.0.15 的 `MODULE LIST` 为空，`RedisSaver.setup()` 会失败；在升级到 Redis 8.x 前，只能验证 `/health/ready` 的 Redis `PING`，不能宣称多轮 checkpoint 已可用。运行 `uv run python -m app.scripts.check_redis_checkpointer` 获取真实诊断结果。
 
