@@ -47,3 +47,20 @@ def test_retrieval_chain_uses_official_high_level_api() -> None:
     result = chain.invoke({"input": "龙门石窟适合玩多久？"})
     assert result["answer"] == "建议游玩三到四小时。[S1]"
     assert result["context"][0].metadata["title"] == "龙门石窟"
+
+
+def test_retrieval_only_chain_returns_documents_without_generation() -> None:
+    from app.chains.rag_chain import create_retrieval_only_chain
+
+    documents = [
+        Document(
+            page_content="龙门石窟建议游玩三到四小时。",
+            metadata={"title": "龙门石窟", "citation_marker": "[S1]"},
+        )
+    ]
+    chain = create_retrieval_only_chain(
+        StaticRetriever(documents=documents)  # type: ignore[arg-type]
+    )
+    result = chain.invoke({"input": "龙门石窟适合玩多久？"})
+    assert result["answer"] == ""
+    assert result["context"][0].page_content == "龙门石窟建议游玩三到四小时。"

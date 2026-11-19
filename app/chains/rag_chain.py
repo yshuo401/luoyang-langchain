@@ -10,7 +10,7 @@ from langchain_classic.chains.combine_documents import create_stuff_documents_ch
 from langchain_core.documents import Document
 from langchain_core.language_models import BaseChatModel
 from langchain_core.prompts import ChatPromptTemplate
-from langchain_core.runnables import Runnable
+from langchain_core.runnables import Runnable, RunnableLambda
 
 from app.core.config import Settings, get_settings
 from app.integrations.milvus import create_vector_store
@@ -40,6 +40,17 @@ def create_rag_chain(
     return create_retrieval_chain(retriever, combine_docs_chain)
 
 
+def create_retrieval_only_chain(
+    retriever: ThresholdRetriever,
+) -> Runnable[dict[str, Any], dict[str, Any]]:
+    """Use create_retrieval_chain for Agent evidence without an extra LLM call."""
+
+    def return_empty_answer(_: dict[str, Any]) -> str:
+        return ""
+
+    return create_retrieval_chain(retriever, RunnableLambda(return_empty_answer))
+
+
 @dataclass(slots=True)
 class RAGAnswer:
     answer: str
@@ -56,12 +67,14 @@ class RAGService:
         retriever: ThresholdRetriever,
         chat_model: BaseChatModel,
         chain: Runnable[dict[str, Any], dict[str, Any]],
+        retrieval_chain: Runnable[dict[str, Any], dict[str, Any]],
     ) -> None:
         self.embedding = embedding
         self.vector_store = vector_store
         self.retriever = retriever
         self.chat_model = chat_model
         self.chain = chain
+        self.retrieval_chain = retrieval_chain
 
     @classmethod
     def from_settings(cls, settings: Settings | None = None) -> RAGService:
@@ -78,6 +91,7 @@ class RAGService:
             retriever=retriever,
             chat_model=chat_model,
             chain=create_rag_chain(retriever, chat_model),
+            retrieval_chain=create_retrieval_only_chain(retriever),
         )
 
     async def retrieve(
@@ -86,7 +100,8 @@ class RAGService:
         if top_k is not None and top_k != self.retriever.k:
             retriever = self.retriever.model_copy(update={"k": min(max(top_k, 1), 8)})
             return await retriever.ainvoke(query)
-        return await self.retriever.ainvoke(query)
+        raw = await self.retrieval_chain.ainvoke({"input": query})
+        return list(raw.get("context", []))
 
     async def answer(self, query: str) -> RAGAnswer:
         raw = await self.chain.ainvoke({"input": query})
@@ -99,3 +114,5 @@ class RAGService:
     async def aclose(self) -> None:
         # Milvus's LangChain wrapper owns no long-lived async HTTP session.
         return None
+
+
