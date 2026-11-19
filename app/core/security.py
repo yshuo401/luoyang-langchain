@@ -121,3 +121,8 @@ async def verify_internal_hmac(
     )
     if not hmac.compare_digest(expected, signature):
         raise InternalAuthError("内部签名校验失败")
+
+    replay_guard = getattr(request.app.state, "replay_guard", None)
+    if replay_guard is not None:
+        await replay_guard.check(x_internal_request_id, signature)
+

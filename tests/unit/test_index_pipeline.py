@@ -34,6 +34,10 @@ class FakeVectorStore:
         del document_id
         return 0
 
+    async def delete_document_versions_except(self, document_id: str, version: int) -> int:
+        del document_id, version
+        return 0
+
 
 class FakeSpringBootClient:
     def __init__(self) -> None:
@@ -85,3 +89,4 @@ async def test_pipeline_builds_stable_vectors_and_callback_batches() -> None:
     assert first.metadata["content_hash"]
     assert client.batches[0].chunks[0].vector_id == expected
     assert progress_values[-1] == 95
+

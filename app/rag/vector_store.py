@@ -56,5 +56,18 @@ class KnowledgeVectorStore:
         except Exception as exc:
             raise MilvusUnavailableError("知识库删除失败") from exc
 
+    async def delete_document_versions_except(self, document_id: str, version: int) -> int:
+        """Remove stale versions after a newer version has been indexed."""
+
+        safe_id = document_id.replace('"', '\\"')
+        expr = f'document_id == "{safe_id}" and document_version != {int(version)}'
+        try:
+            existing = await asyncio.to_thread(self._store.get_pks, expr)
+            await asyncio.to_thread(self._store.delete, expr=expr)
+            return len(existing or [])
+        except Exception as exc:
+            raise MilvusUnavailableError("旧版本知识清理失败") from exc
+
     def raw(self) -> Any:
         return self._store
+

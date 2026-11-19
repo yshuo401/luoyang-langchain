@@ -7,6 +7,7 @@ from dataclasses import dataclass
 import httpx
 
 from app.core.config import Settings, get_settings
+from app.core.constants import ErrorCode
 from app.core.errors import ServiceError
 
 
@@ -19,7 +20,7 @@ class DownloadedFile:
 
 class DownloadError(ServiceError):
     def __init__(self, message: str, *, code: str) -> None:
-        super().__init__(50301, message, 502, retryable=True)
+        super().__init__(ErrorCode.DEPENDENCY_UNAVAILABLE, message, 502, retryable=True)
         self.error_code = code
 
 
@@ -66,3 +67,4 @@ class DocumentDownloader:
             if key.lower() == "filename":
                 return raw.strip('"') or None
         return None
+

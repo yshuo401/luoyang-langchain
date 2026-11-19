@@ -75,6 +75,9 @@ class IndexPipeline:
         await self._vector_store.upsert_documents(documents)
         await progress(75, len(documents))
         await self._notify_chunks(request, documents)
+        await self._vector_store.delete_document_versions_except(
+            request.document_id, request.document_version
+        )
         await progress(95, len(documents))
         return len(documents)
 
@@ -129,3 +132,4 @@ class IndexPipeline:
         if not name or "." not in name:
             raise DocumentParseError("UNSUPPORTED_FILE_TYPE", "无法识别文档文件名")
         return name
+

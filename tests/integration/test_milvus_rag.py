@@ -86,20 +86,35 @@ async def test_milvus_upsert_filter_and_delete() -> None:
             ),
         ]
         await vector_store.upsert_documents(documents)
+        await vector_store.upsert_documents(
+            [
+                Document(
+                    page_content="新版龙门石窟资料。",
+                    metadata={
+                        "vector_id": "vec-4",
+                        "document_id": "doc-1",
+                        "document_version": 2,
+                        "chunk_index": 0,
+                        "title": "龙门石窟新版",
+                        "enabled": True,
+                    },
+                )
+            ]
+        )
+        removed = await vector_store.delete_document_versions_except("doc-1", 2)
+        assert removed >= 1
         results = await vector_store.similarity_search_with_score(
             "龙门石窟游玩时间",
-            k=3,
-            expr="enabled == true",
+            k=5,
+            expr='document_id == "doc-1" and enabled == true',
         )
         assert results
-        assert all(
-            document.metadata["document_id"] != "doc-1" or document.metadata["enabled"]
-            for document, _ in results
-        )
+        assert all(document.metadata["document_version"] == 2 for document, _ in results)
         deleted = await vector_store.delete_document("doc-1")
         assert deleted >= 1
     finally:
         client.drop_collection(collection)
         client.close()
+
 
 

@@ -16,6 +16,7 @@ from app.core.config import get_settings
 from app.core.constants import REQUEST_ID_HEADER, SERVICE_VERSION
 from app.core.errors import ServiceError
 from app.core.logging import configure_logging, get_logger
+from app.core.replay import ReplayGuard
 from app.runtime import ApplicationRuntime, build_runtime
 from app.schemas.common import ApiEnvelope
 
@@ -30,6 +31,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     runtime: ApplicationRuntime | None = None
     app.state.index_service = None
     app.state.chat_service = None
+    replay_guard = ReplayGuard(settings)
+    app.state.replay_guard = replay_guard
     try:
         runtime = await build_runtime(settings)
         app.state.runtime = runtime
@@ -43,6 +46,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     finally:
         if runtime is not None:
             await runtime.close()
+        await replay_guard.close()
         logger.info("service_stopped", extra={"event": "service_stopped"})
 
 
@@ -104,3 +108,4 @@ def create_app() -> FastAPI:
 
 
 app = create_app()
+

@@ -160,6 +160,7 @@ class IndexJobManager:
         self._settings = settings or get_settings()
         self._tasks: set[asyncio.Task[None]] = set()
         self._lock = asyncio.Lock()
+        self._run_lock = asyncio.Lock()
 
     async def submit(self, request: IndexJobSubmitRequest) -> IndexJobView:
         key = request.idempotency_key
@@ -212,6 +213,10 @@ class IndexJobManager:
         ).hexdigest()
 
     async def _run(self, job: IndexJobView, request: IndexJobSubmitRequest) -> None:
+        async with self._run_lock:
+            await self._run_locked(job, request)
+
+    async def _run_locked(self, job: IndexJobView, request: IndexJobSubmitRequest) -> None:
         job = job.model_copy(
             update={"status": "RUNNING", "progress": 5, "updated_at": datetime.now(UTC)}
         )
@@ -260,5 +265,6 @@ class IndexJobManager:
         if self._tasks:
             await asyncio.gather(*self._tasks, return_exceptions=True)
         await self._store.close()
+
 
 
