@@ -1,7 +1,7 @@
 # AI 服务（`ai-service/`）
 
 > 状态：M6–M7 核心实现已完成（2026-11-19）：知识解析/切分/Milvus 索引、阈值 RAG、`create_retrieval_chain`、`create_agent` 工具编排、请求级证据登记、引用校验、Redis/InMemory checkpointer、HMAC 内部接口和资料不足降级均已落地并通过自动测试。
-> **基础设施门禁**：当前 VM Redis 7.0.15 没有 RedisJSON/RediSearch，正式 `RedisSaver.setup()` 仍会报 `unknown command 'FT.INFO'`；演示多轮对话必须升级到 Redis 8.x。仅在单进程本地调试时，可显式设置 `CHECKPOINTER_BACKEND=memory` 使用官方 `InMemorySaver`，该模式禁止用于生产。
+> **Redis 状态（2026-11-19）**：VM 已升级为 `redis:8.2`（`8.2.11`），entrypoint 自动加载 ReJSON/search/bf/timeseries；checkpointer 固定 DB 0 + `langgraph:checkpoint:` 前缀，`checkpointer: READY` 和真实多轮/reset 均已通过。单进程本地调试仍可显式使用 `CHECKPOINTER_BACKEND=memory`，该模式禁止用于生产。
 > 技术栈：Python 3.14.2 + uv 0.13.7、FastAPI、Pydantic v2、LangChain、LangGraph、Milvus、Redis checkpointer、阿里云千问（Qwen）。
 > 本地监听：`127.0.0.1:8000`，**只允许 Spring Boot 内网调用**。
 > 系统角色：旅游知识 RAG、工具型 Agent 编排、短期记忆、来源追溯和“资料不足”降级；不是第二业务后端。
@@ -178,7 +178,7 @@ uv run ruff check .
 uv run mypy app
 uv run pytest
 uv run python -m app.scripts.check_langchain_api
-# 当前 Redis 7.0.15 预期 NOT_READY；升级 Redis 8.x 后再要求 READY
+# 当前 Redis 8.2.11 应输出 checkpointer: READY
 uv run python -m app.scripts.check_redis_checkpointer
 uv run uvicorn app.main:app --host 127.0.0.1 --port 8000 --reload
 ```
@@ -196,7 +196,7 @@ uv run uvicorn app.main:app --host 127.0.0.1 --port 8000 --reload
 
 所有 `/internal/v1/ai/**` 路由均要求 HMAC-SHA256、时间窗和请求 ID，不能通过 Nginx 暴露。
 
-> **Redis 版本门禁**：`langgraph-checkpoint-redis 0.6.0` 依赖 RedisJSON 和 RediSearch。当前 VM Redis 7.0.15 的 `MODULE LIST` 为空，`RedisSaver.setup()` 会失败；在升级到 Redis 8.x 前，只能验证 `/health/ready` 的 Redis `PING`，不能宣称多轮 checkpoint 已可用。运行 `uv run python -m app.scripts.check_redis_checkpointer` 获取真实诊断结果。
+> **Redis 验证结果**：`langgraph-checkpoint-redis 0.6.0` 依赖 RedisJSON 和 RediSearch。当前 VM 为 Redis 8.2.11，模块完整；checkpointer 使用 DB 0 + 前缀，`RedisSaver.setup()` 已输出 `checkpointer: READY`，真实多轮消息与 reset 测试均通过。
 
 另开终端执行测试：
 
@@ -225,7 +225,7 @@ $env:RUN_QWEN_SMOKE='1'; uv run pytest tests/integration/test_qwen_smoke.py
 | DashScope SDK | 2.1.0 |
 | PyMilvus | 3.0.3 |
 
-> 表中 `redis` Python SDK 8.1.0 只是客户端库，不代表 Redis 服务器版本。checkpoint 目标服务器必须是 Redis 8.x（包含 RedisJSON/RediSearch），例如固定 `redis:8.10.1`；Redis 7.0 不能作为最终 checkpoint 环境。
+> 表中 `redis` Python SDK 8.1.0 只是客户端库，不代表 Redis 服务器版本。checkpoint 目标服务器已固定为 `redis:8.2`（8.2.11，含 RedisJSON/RediSearch）；RedisSearch 索引固定使用 DB 0。
 
 Swagger 与健康检查：
 
@@ -286,8 +286,8 @@ MILVUS_TOKEN=
 MILVUS_COLLECTION=luoyang_tourism_knowledge_v1
 MILVUS_METRIC_TYPE=COSINE
 
-# Redis / LangGraph checkpoint（服务器必须为 Redis 8.x + RedisJSON + RediSearch）
-REDIS_URL=redis://192.168.100.128:6379/1
+# Redis / LangGraph checkpoint（服务器必须为 Redis 8.2 + RedisJSON + RediSearch）
+REDIS_URL=redis://192.168.100.128:6379/0
 CHECKPOINT_KEY_PREFIX=langgraph:checkpoint:
 CHECKPOINT_TTL_SECONDS=604800
 
@@ -316,8 +316,8 @@ EMBEDDING_BATCH_SIZE=16
 - `qwen3-vl-embedding` 不支持 OpenAI-compatible Embeddings，禁止传给 `OpenAIEmbeddings`；统一使用官方 SDK 适配器。
 - `QWEN_EMBEDDING_DIM` 已用真实调用验证为 `1024`，且必须与 Milvus collection 的 `dim` 一致；换 embedding 模型必须重建 collection，不得混写。
 - `RAG_MIN_SCORE` 必须用本地 30–50 条问题评估后校准；未校准前不得直接上线。
-- `REDIS_URL` 使用独立 database 或前缀，避免和 Java 缓存、刷新令牌、限流 key 冲突。
-- Redis 服务器必须满足 `RedisSaver` 的 RedisJSON/RediSearch 前置条件；当前 VM Redis 7.0.15 不满足，正式多轮演示前必须升级到 Redis 8.x。
+- `REDIS_URL` 固定使用 DB 0；不要擅自切到 DB 1，因为 RedisSearch 不支持在非 0 DB 建索引。通过 `CHECKPOINT_KEY_PREFIX=langgraph:checkpoint:` 与 Java 缓存隔离。
+- Redis 服务器已满足 `RedisSaver` 的 RedisJSON/RediSearch 前置条件；当前 VM 为 Redis 8.2.11，checkpointer 使用 DB 0 + 前缀并通过 `checkpointer: READY`。
 - 运行 `uv run python -m app.scripts.check_redis_checkpointer`；只有输出 `checkpointer: READY` 才能进入多轮 Agent 验收。
 - `CHECKPOINT_TTL_SECONDS` 与 Java 会话保留策略保持一致。
 - `MODEL_MAX_CONCURRENCY` 是模型并发上限；超过上限时短等待后返回可重试错误，不无限排队。
@@ -728,7 +728,7 @@ signature = hex(HMAC-SHA256(INTERNAL_SHARED_SECRET, canonicalString))
 
 ### 15.3 checkpoint 恢复不了
 
-确认 Java 传来的 `threadId` 是数据库中的 ULID 且从未重新生成；确认 Redis database/前缀没有与 Java 冲突；检查 `/health/ready` 和 checkpointer setup 日志。只有当前 thread 没有状态时才使用 `recoveryHistory`，且最多最近 6–10 条。
+确认 Java 传来的 `threadId` 是数据库中的 ULID 且从未重新生成；checkpointer 固定使用 Redis DB 0，`langgraph:checkpoint:` 前缀不能与 Java 缓存冲突；检查 `/health/ready` 和 checkpointer setup 日志。只有当前 thread 没有状态时才使用 `recoveryHistory`，且最多最近 6–10 条。
 
 ### 15.4 Redis 不可用
 
@@ -769,3 +769,6 @@ AI 服务应按 fail-closed 处理多轮会话，不要把缺少 checkpoint 误�
 4. `agents` / `tools`：`create_agent`、六个白名单工具、请求级证据与工具预算。
 5. `memory` / `services`：Redis/InMemory checkpointer、`threadId` 对齐、结果缓存、聊天编排。
 6. `api`：聊天、checkpoint reset、索引提交/查询/删除和 health 路由。
+
+
+
