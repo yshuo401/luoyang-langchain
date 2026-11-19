@@ -1,0 +1,68 @@
+[project]
+name = "luoyang-ai-service"
+version = "0.1.0"
+description = "洛阳景点智能推荐系统 AI 能力层：FastAPI + LangChain + LangGraph + Qwen + Milvus"
+readme = "README.md"
+requires-python = ">=3.14,<3.15"
+dependencies = [
+    "dashscope>=2.1.0",
+    "fastapi>=0.163.1",
+    "httpx>=0.28.1",
+    "langchain>=1.5.0",
+    "langchain-classic>=1.0.8",
+    "langchain-community>=0.4.2",
+    "langchain-milvus>=0.4.0",
+    "langchain-openai>=1.8.0",
+    "langchain-text-splitters>=1.1.3",
+    "langgraph>=1.2.22",
+    "langgraph-checkpoint-redis>=0.6.0",
+    "pydantic-settings>=2.16.3",
+    "pymilvus>=3.0.3",
+    "pypdf>=7.1.0",
+    "python-docx>=1.2.0",
+    "python-dotenv>=1.2.4",
+    "redis>=8.1.0",
+    "uvicorn[standard]>=0.54.0",
+]
+
+[[tool.uv.index]]
+url = "https://mirrors.aliyun.com/pypi/simple/"
+default = true
+
+[tool.uv]
+package = false
+
+[dependency-groups]
+dev = [
+    "mypy>=2.4.1",
+    "pytest>=9.2.0",
+    "pytest-asyncio>=1.5.0",
+    "pytest-cov>=7.1.0",
+    "ruff>=0.17.5",
+]
+
+[tool.ruff]
+target-version = "py314"
+line-length = 100
+src = ["app", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+addopts = "-ra"
+markers = [
+    "integration: requires local Redis/Milvus infrastructure",
+    "live: calls a real external model or service",
+]
+
+[tool.mypy]
+python_version = "3.14"
+check_untyped_defs = true
+ignore_missing_imports = true
+explicit_package_bases = true
+plugins = ["pydantic.mypy"]
+

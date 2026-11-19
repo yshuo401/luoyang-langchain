@@ -1,0 +1,1 @@
+"""Redis checkpointer 生命周期；M7 使用 RedisSaver 官方实现。"""

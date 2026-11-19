@@ -1,0 +1,1 @@
+"""RAG 链构建入口；M6 使用 create_retrieval_chain。"""
