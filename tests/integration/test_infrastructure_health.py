@@ -1,22 +1,19 @@
-import asyncio
+from __future__ import annotations
+
 import os
 
 import pytest
-from app.api.health import _check_milvus, _check_redis
-from app.core.config import get_settings
+from app.config import get_settings
+from app.rag import check_milvus
 
 pytestmark = [
     pytest.mark.integration,
     pytest.mark.skipif(
         os.getenv("RUN_INFRA_TESTS") != "1",
-        reason="设置 RUN_INFRA_TESTS=1 后才连接 Redis/Milvus",
+        reason="设置 RUN_INFRA_TESTS=1 后才连接 Milvus",
     ),
 ]
 
 
-def test_redis_is_reachable() -> None:
-    assert asyncio.run(_check_redis(get_settings())) is True
-
-
 def test_milvus_is_reachable() -> None:
-    assert _check_milvus(get_settings()) is True
+    assert check_milvus(get_settings()) is True

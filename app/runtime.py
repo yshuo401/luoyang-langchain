@@ -1,4 +1,17 @@
-"""Application runtime composition; dependencies are created once in lifespan."""
+"""应用启动时的对象装配。
+
+把所有对象的创建集中在这里，而不是让每个模块互相创建依赖。启动时的
+顺序如下：
+
+    Qwen Chat/Embedding
+      -> Milvus VectorStore
+      -> RAGService
+      -> SpringBootClient
+      -> IndexService
+      -> 可选 MCP 工具
+      -> create_agent
+      -> ChatService
+"""
 
 from __future__ import annotations
 
@@ -6,15 +19,14 @@ import asyncio
 from dataclasses import dataclass
 from typing import Any
 
-from app.agents.tourism_agent import create_tourism_agent
-from app.chains.rag_chain import RAGService
-from app.core.config import Settings
-from app.core.logging import get_logger
-from app.integrations.qwen import create_chat_model
-from app.integrations.springboot_client import SpringBootClient
-from app.memory.checkpointer import RedisCheckpointerManager, create_memory_checkpointer
-from app.services.chat_service import ChatService
-from app.services.index_service import IndexService
+from app.agent import create_memory_checkpointer, create_tourism_agent
+from app.chat import ChatService
+from app.config import Settings, get_logger
+from app.indexer import DocumentDownloader, IndexJobManager, IndexPipeline, IndexService
+from app.llm import create_chat_model, create_embeddings
+from app.rag import RAGService, create_vector_store
+from app.springboot import SpringBootClient
+from app.tools import LOCAL_TOOLS, load_mcp_tools
 
 logger = get_logger(__name__)
 
@@ -25,78 +37,74 @@ class ApplicationRuntime:
     rag_service: RAGService | None
     springboot_client: SpringBootClient
     chat_service: ChatService
-    checkpointer_manager: RedisCheckpointerManager | None
     agent: Any | None
 
     async def close(self) -> None:
         await self.chat_service.close()
-        if self.checkpointer_manager is not None:
-            await self.checkpointer_manager.close()
-        if self.rag_service is not None:
-            await self.rag_service.aclose()
-        await self.springboot_client.aclose()
         if self.index_service is not None:
             await self.index_service.close()
+        await self.springboot_client.aclose()
 
 
 async def build_runtime(settings: Settings) -> ApplicationRuntime:
-    index_service: IndexService | None = None
+    chat_model = create_chat_model(settings)
+    embeddings = create_embeddings(settings)
+
+    vector_store = None
     rag_service: RAGService | None = None
-    checkpointer_manager: RedisCheckpointerManager | None = None
-    agent: Any | None = None
-
+    index_service: IndexService | None = None
     try:
-        index_service = await asyncio.wait_for(
-            asyncio.to_thread(IndexService.from_settings, settings),
+        vector_store = await asyncio.wait_for(
+            asyncio.to_thread(create_vector_store, embeddings, settings=settings),
             timeout=15,
         )
     except Exception:
-        logger.exception("index_service_initialization_failed")
+        # Milvus 暂时不可用时，健康检查会返回 not_ready；服务本身仍可启动，
+        # 这样前端能看到明确的依赖错误，而不是整个进程直接退出。
+        logger.exception("milvus_vector_store_initialization_failed")
 
-    try:
-        rag_service = await asyncio.wait_for(
-            asyncio.to_thread(RAGService.from_settings, settings),
-            timeout=15,
+    if vector_store is not None:
+        rag_service = RAGService(
+            vector_store=vector_store,
+            chat_model=chat_model,
+            settings=settings,
         )
-    except Exception:
-        logger.exception("rag_service_initialization_failed")
 
-    springboot_client = SpringBootClient(timeout_seconds=settings.tool_timeout_seconds)
-    try:
-        saver: Any
-        if settings.checkpointer_backend == "memory":
-            if settings.app_env == "production":
-                raise RuntimeError("memory checkpointer is forbidden in production")
-            saver = create_memory_checkpointer()
-        else:
-            checkpointer_manager = RedisCheckpointerManager(settings)
-            saver = await checkpointer_manager.start()
-        agent = create_tourism_agent(
-            chat_model=create_chat_model(settings),
-            checkpointer=saver,
+    springboot_client = SpringBootClient(settings)
+    if vector_store is not None:
+        pipeline = IndexPipeline(
+            vector_store=vector_store,
+            springboot_client=springboot_client,
+            downloader=DocumentDownloader(settings),
+            settings=settings,
         )
-    except Exception:
-        logger.exception("agent_checkpointer_initialization_failed")
-        if checkpointer_manager is not None:
-            await checkpointer_manager.close()
-        checkpointer_manager = None
-        agent = None
+        index_service = IndexService(IndexJobManager(pipeline, settings), pipeline)
 
-    chat_service = ChatService.from_settings(
+    mcp_tools = []
+    try:
+        mcp_tools = await load_mcp_tools(settings)
+    except Exception:
+        # MCP 是可选增强。没有 Node、网络或 12306 服务时，不应该影响本地
+        # 景点查询和 RAG 问答。
+        logger.exception("mcp_tools_initialization_failed")
+
+    checkpointer = create_memory_checkpointer()
+    agent = create_tourism_agent(
+        chat_model=chat_model,
+        checkpointer=checkpointer,
+        tools=[*LOCAL_TOOLS, *mcp_tools],
+    )
+    chat_service = ChatService(
+        settings=settings,
         springboot_client=springboot_client,
         rag_service=rag_service,
         agent=agent,
-        checkpointer=checkpointer_manager.saver if checkpointer_manager else None,
-        settings=settings,
+        checkpointer=checkpointer,
     )
     return ApplicationRuntime(
         index_service=index_service,
         rag_service=rag_service,
         springboot_client=springboot_client,
         chat_service=chat_service,
-        checkpointer_manager=checkpointer_manager,
         agent=agent,
     )
-
-
-
