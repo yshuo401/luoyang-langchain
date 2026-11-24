@@ -5,7 +5,7 @@
     guard -> checkpoint -> Agent -> 来源校验 -> ChatResult
 
 把这段流程单独放在 `chat.py`，是为了让 `main.py` 只处理 HTTP，让
-`agent.py` 只处理 Agent 本身，让 `tools.py` 只处理工具。
+`agent.py` 只处理 Agent 本身，让 `tools/` 只处理工具。
 """
 
 from __future__ import annotations

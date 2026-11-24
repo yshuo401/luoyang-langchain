@@ -9,486 +9,312 @@
 
 ## 1. 先说结论
 
-当前 `app` 目录下有 13 个代码子包：
+第一版 `ai-service` 按企业项目的方式拆成了 13 个子包（`api`、`services`、`agents`、`tools`、`integrations`、`chains`、`rag`、`schemas` 等）。一次普通问答要在八九个目录之间跳转，读者很难回答“这个请求到底经过了哪些代码”。
+
+后来先做过一次“全部平铺”，把代码压成 12 个同级 `.py` 文件。功能虽然清楚了，但 `tools.py`、`rag.py`、`indexer.py` 各自包含多个技术动作，单个文件又变成几百行，仍然不好阅读。
+
+因此最终采用折中方案：**只保留 3 个有意义、边界稳定的包，其余模块继续平铺。**
 
 ```text
-agents
-api
-chains
-core
-ingestion
-integrations
-memory
-prompts
-rag
-schemas
-scripts
-services
-tools
+最终结构 = 3 个包 + 9 个平铺模块
+
+tools/      工具上下文、业务工具、RAG 工具、MCP 工具
+rag/        文档解析、Milvus、检索链
+indexer/    下载、索引流水线、任务表、服务门面
+
+config.py / errors.py / schemas.py / llm.py
+springboot.py / agent.py / chat.py / runtime.py / main.py
 ```
 
-代码功能是完整的，但阅读路径被切得太碎。一次普通问答，读者需要同时理解：
+这不是恢复旧版 13 个包，而是只对“确实有多个文件、确实需要分组”的三块知识做分包。**包的存在是为了减少单个文件长度，不是为了增加架构层级。**
 
-```text
-api -> services -> agents -> tools -> integrations -> chains -> rag -> schemas
-```
+---
 
-而且每一层还可能有多个文件、多个抽象类、多个错误转换。对于企业团队，这样做方便多人并行维护；对于本科毕设，它会让“我只是想知道一次问答怎么走完”变得非常困难。
-
-本次重构后的目标结构是：
+## 2. 最终目录
 
 ```text
 ai-service/
 ├─ app/
 │  ├─ __init__.py
-│  ├─ config.py          # 配置、常量、日志、内部 token
-│  ├─ errors.py          # 统一业务异常
-│  ├─ schemas.py         # 所有 Pydantic 请求/响应模型
-│  ├─ llm.py             # ChatOpenAI + DashScopeEmbeddings
-│  ├─ rag.py             # MinerU、切分、Milvus、检索、create_retrieval_chain
-│  ├─ springboot.py      # 调用 Spring Boot 内部只读接口
-│  ├─ tools.py           # 六个本地工具 + 工具上下文 + MCP 工具合并
-│  ├─ agent.py           # create_agent、提示词、来源登记、引用校验、资料不足
-│  ├─ chat.py            # 一次聊天从输入到响应的主流程
-│  ├─ indexer.py         # 下载 -> MinerU -> 切分 -> Milvus -> Java chunk 回写
-│  ├─ runtime.py         # 启动时组装所有对象
-│  └─ main.py            # FastAPI 入口与 7 个内部接口
+│  ├─ config.py              配置、常量、日志、ULID、内部 token
+│  ├─ errors.py              统一业务异常
+│  ├─ schemas.py             所有 Pydantic 请求/响应模型
+│  ├─ llm.py                 ChatOpenAI + DashScopeEmbeddings
+│  ├─ springboot.py          Java 内部接口客户端
+│  ├─ agent.py               create_agent、提示词、引用校验
+│  ├─ chat.py                一次问答的主流程
+│  ├─ runtime.py             启动时组装所有对象
+│  ├─ main.py                FastAPI 路由和异常处理
+│  ├─ tools/
+│  │  ├─ __init__.py         统一导出 LOCAL_TOOLS 和工具上下文
+│  │  ├─ context.py          RequestContext、工具预算、来源登记
+│  │  ├─ business.py         景点/攻略/美食/推荐五个业务工具
+│  │  ├─ knowledge.py        RAG 知识库检索工具
+│  │  └─ mcp.py              12306 MCP 加载、超时和来源包装
+│  ├─ rag/
+│  │  ├─ __init__.py         统一导出 RAG API
+│  │  ├─ documents.py        TXT/Markdown、MinerU、标题和长度切分
+│  │  ├─ store.py            Milvus 连接、collection、健康检查
+│  │  └─ service.py          retrieve + create_retrieval_chain
+│  └─ indexer/
+│     ├─ __init__.py         统一导出 IndexService 及其依赖
+│     ├─ downloader.py       OSS 临时 URL 下载
+│     ├─ pipeline.py         下载 -> MinerU -> 切分 -> Milvus -> Java
+│     ├─ jobs.py             进程内任务表、幂等键、状态机
+│     └─ service.py          提供给 FastAPI 的索引入口
 ├─ tests/
-├─ .env
 ├─ .env.example
 ├─ pyproject.toml
 ├─ README.md
-├─ LEARNER-REFACTOR.md   # 本文：为什么改、怎么改
-└─ CODE-GUIDE.md         # 重构后的逐文件代码讲解
+├─ LEARNER-REFACTOR.md       本文：为什么这样拆
+└─ CODE-GUIDE.md             逐文件代码讲解
 ```
 
-注意：这里仍然是“一个 `app` Python 包”，只是**不再在 `app` 下继续创建 13 个子包**。这些文件都是平级的，打开任何一个都不需要先穿过三层 `__init__.py`。
+打开 `app/` 后，你只需要先认出三个文件夹和九个平铺文件。没有 `api/ -> services/ -> agents/ -> chains/` 这样的逐层转发。
 
 ---
 
-## 2. 为什么 13 个包对毕设过重
+## 3. 为什么是这 3 个包
 
-### 2.1 当前规模
+### 3.1 `tools/`：工具天然适合按业务分文件
 
-重构前大致规模：
+Agent 会调用六类本地工具：
 
-| 指标 | 数量 |
-|---|---:|
-| `app` 下子包 | 13 |
-| Python 文件 | 约 59 |
-| Python 代码行 | 约 2900 |
-| 测试文件 | 14 |
+- 查询景点；
+- 查询景点详情；
+- 查询攻略；
+- 查询美食；
+- 推荐景点；
+- 检索知识库。
 
-代码量本身并不是特别大，真正的问题是“概念层数太多”。例如：
+另外还要把 12306 MCP 工具包装成统一格式。如果把所有这些内容放在一个 `tools.py` 中，文件会超过 600 行。
 
-- `tools/` 为了复用几个辅助函数拆成 7 个文件；
-- `rag/` 为了解析、切分、检索、向量库拆成 5 个文件；
-- `integrations/` 又拆出 Qwen、Milvus、Spring Boot、下载器；
-- `schemas/` 拆成 5 个文件；
-- `core/` 拆成配置、常量、错误、ID、日志、安全 6 个文件。
-
-这像是一个多人维护的中型项目结构，不像一个学生需要独立讲清楚的毕业设计。
-
-### 2.2 不是所有“标准做法”都适合毕设
-
-企业项目强调：
-
-- 可替换实现；
-- 多人并行开发；
-- 依赖注入和接口隔离；
-- 监控、重试、熔断、任务持久化；
-- 为未来扩展预留抽象。
-
-毕设更强调：
-
-- 功能闭环；
-- 能演示；
-- 能解释；
-- 能定位错误；
-- 代码量适中；
-- 技术点真实存在，不是为了“显得高级”而加。
-
-因此本次不删除功能，而是删除“为不存在的团队和流量准备的抽象”。
-
----
-
-## 3. 与你提供的 LangChain 学习资料逐项对齐
-
-| 学习资料中的知识点 | 本项目保留方式 | 重构前的问题 | 重构后 |
-|---|---|---|---|
-| `DashScopeEmbeddings(model="text-embedding-v4")` | 直接使用官方高层类 | 自定义 `QwenMultiModalEmbeddings`，手写适配层 | `llm.py` 中一行模型初始化 |
-| `ChatOpenAI` 兼容千问 | 保留 | 包装在 `integrations/qwen.py` | `llm.py` 中集中创建 |
-| MinerU 文档解析 | 使用 `mineru-open-sdk` | 手写 PDF、DOCX 解析 | `rag.py` 中调用 MinerU `extract()` |
-| `RecursiveCharacterTextSplitter` | 保留 | 被多层 `TextSection` 包装 | 直接切 `Document` |
-| `Milvus` 向量库 | 保留 | `Milvus -> KnowledgeVectorStore -> ThresholdRetriever` 三层 | `Milvus` + 少量直接操作函数 |
-| `create_retrieval_chain` | 保留 | 包装在 `chains/rag_chain.py` | `rag.py` 中保留一个清晰示例 |
-| `create_agent` | 保留 | `agents/` 包内再拆 state 和 agent | `agent.py` 一个文件 |
-| `InMemorySaver` | 保留 | `memory/checkpointer.py` | `agent.py` 或直接 `InMemorySaver()` |
-| 工具调用 | 保留六个业务工具 | 每个工具一个文件 + `_common.py` | `tools.py` 一个文件 |
-| MCP | 新增可选能力 | 原来没有 | `MultiServerMCPClient` + 12306 MCP 可选启用 |
-| 多轮对话 | 保留 `thread_id` | 包装在多个服务层 | `chat.py + agent.py` 直接可见 |
-
----
-
-## 4. 必须保留的功能清单
-
-重构不是删功能。以下功能继续存在：
-
-### 4.1 对外（由 Spring Boot 调用）
-
-1. `POST /internal/v1/ai/chat`：AI 问答；
-2. `POST /internal/v1/ai/checkpoints/{threadId}/reset`：清理会话；
-3. `POST /internal/v1/ai/index/jobs`：提交知识文档索引；
-4. `GET /internal/v1/ai/index/jobs/{jobId}`：查询索引进度；
-5. `POST /internal/v1/ai/index/documents/{documentId}/delete`：删除文档向量；
-6. `GET /health/live`：进程存活；
-7. `GET /health/ready`：Milvus 和 Agent 就绪。
-
-### 4.2 Agent 本地工具
-
-- `search_scenic_spots`：搜索景点；
-- `get_spot_detail`：景点详情；
-- `search_travel_guides`：攻略查询；
-- `search_foods`：美食查询；
-- `retrieve_tourism_knowledge`：Milvus 知识检索；
-- `recommend_spots`：读取 Java 的确定性推荐结果。
-
-### 4.3 RAG 能力
-
-- Qianwen Embedding；
-- Milvus 写入、相似度检索、删除；
-- MinerU 解析 PDF、DOCX 等复杂文档；
-- Markdown / TXT 直接读取；
-- 文档切分；
-- 来源追溯；
-- 引用标记校验；
-- 资料不足时降级。
-
-### 4.4 会话能力
-
-- `threadId` 对应 LangGraph `thread_id`；
-- `InMemorySaver` 维护进程内多轮状态；
-- Java 传入 `recoveryHistory` 时恢复上下文；
-- 删除 checkpoint。
-
-### 4.5 MCP 能力
-
-- 使用 `MultiServerMCPClient`；
-- 支持 12306 购票查询 MCP；
-- MCP 失败不影响本地工具和普通 RAG；
-- MCP 结果必须有查询时间与“实时数据仅供参考”的提示。
-
----
-
-## 5. 核心技术决策
-
-### 5.1 Embedding 改成 `DashScopeEmbeddings`
-
-学习资料中的写法是：
-
-```python
-from langchain_community.embeddings import DashScopeEmbeddings
-
-embeddings = DashScopeEmbeddings(model="text-embedding-v4")
-```
-
-项目内部改用同样风格的封装：
-
-```python
-def create_embeddings(settings: Settings) -> DashScopeEmbeddings:
-    return DashScopeEmbeddings(
-        model=settings.qwen_embedding_model,
-        dashscope_api_key=settings.qwen_api_key.get_secret_value(),
-    )
-```
-
-这样做的原因：
-
-- 不再手写 `MultiModalEmbedding.call`；
-- 不再自己排序返回结果；
-- 不再手写维度校验；
-- `text-embedding-v4` 是标准文本向量模型，适合知识库问答；
-- LangChain 的 `Embeddings` 接口已经由官方社区包实现。
-
-### 5.2 为什么必须换 Milvus collection
-
-Embedding 模型变了，向量空间就变了。即使维度同为 1024，也不能保证旧向量和新查询向量可比较。因此：
+拆成 4 个文件后，阅读路径非常直接：
 
 ```text
-旧：luoyang_tourism_knowledge_v1
-新：luoyang_tourism_knowledge_v2
+想理解工具如何限制调用次数
+  -> tools/context.py
+
+想看景点、美食、推荐怎么查 Java
+  -> tools/business.py
+
+想看 RAG 工具怎么检索 Milvus
+  -> tools/knowledge.py
+
+想看 12306 MCP 怎么加载
+  -> tools/mcp.py
 ```
 
-更换后需要重新索引已有知识文档。这是正确的数据迁移行为，不是 bug。
+`tools/__init__.py` 只负责把 `LOCAL_TOOLS` 汇总出来，`agent.py` 不需要知道工具内部怎么实现。
 
-### 5.3 MinerU 的统一文档入口
+### 3.2 `rag/`：解析、存储、检索链是三个技术动作
 
-处理规则：
+`rag/` 内部分成：
 
-| 文件类型 | 解析方式 |
+```text
+documents.py   文件内容 -> Markdown -> 文本分片
+store.py       Embedding + Milvus collection
+service.py     查询向量 -> 组装来源 -> create_retrieval_chain
+```
+
+这三个动作的输入输出不同，出错后的排查位置也不同：
+
+- MinerU 失败，看 `documents.py`；
+- Milvus 连接失败，看 `store.py`；
+- 检索结果没有来源，看 `service.py` 和 `tools/knowledge.py`。
+
+如果把这三部分塞回一个 `rag.py`，文件会超过 400 行，而且修改其中的 embedding 时容易误碰文档切分。
+
+### 3.3 `indexer/`：一条后台流水线本来就有多个阶段
+
+索引不是一次普通函数调用，而是一个后台任务：
+
+```text
+下载 OSS 文件
+  -> MinerU 解析
+  -> 切分 Markdown
+  -> 写入 Milvus
+  -> 把 chunk 回写 Spring Boot
+  -> 清理旧版本向量
+```
+
+所以自然拆成：
+
+- `downloader.py`：只负责 HTTP 下载和大小限制；
+- `pipeline.py`：只负责执行一次索引；
+- `jobs.py`：只负责任务状态、幂等和串行调度；
+- `service.py`：只负责把能力暴露给 FastAPI。
+
+这样每个文件都能用一句话说明职责，不需要 `manager/factory/helper` 这类空壳层。
+
+### 3.4 其余文件为什么不继续建包
+
+`config.py`、`errors.py`、`schemas.py`、`llm.py`、`springboot.py`、`agent.py`、`chat.py`、`runtime.py`、`main.py` 各自只有一个主要概念。给每个文件再建一个包，只会增加 `__init__.py` 和 import 跳转，不会提高理解速度。
+
+判断标准很简单：
+
+> **一个概念一个文件；多个紧密相关且各自有独立职责的文件，才建一个包。**
+
+---
+
+## 4. 与旧版 13 个包的对应关系
+
+| 旧版目录 | 最终去向 |
 |---|---|
-| `.txt` / `.md` / `.markdown` | 直接读取并清洗，避免无意义调用云服务 |
-| `.pdf` / `.docx` / 图片等 | 保存临时文件，调用 MinerU `extract()`，取回 Markdown |
-| 其他类型 | 明确报错 `UNSUPPORTED_FILE_TYPE` |
+| `api/` | 合并到 `main.py` |
+| `services/` | 问答流程放进 `chat.py`，索引门面放进 `indexer/service.py` |
+| `agents/` | 合并到 `agent.py` |
+| `chains/` | RAG 链放进 `rag/service.py`，Agent 编排放进 `agent.py` |
+| `rag/` | 保留为有边界的 `rag/` 包，但只保留 3 个实现文件 |
+| `tools/` | 保留为有边界的 `tools/` 包，按业务拆成 4 个文件 |
+| `integrations/` | Qwen 放进 `llm.py`，Java 客户端放进 `springboot.py`，Milvus 放进 `rag/store.py`，下载放进 `indexer/downloader.py` |
+| `ingestion/` | 合并到 `indexer/` |
+| `core/` | 配置/错误/ID/日志放进 `config.py`、`errors.py` |
+| `schemas/` | 合并到 `schemas.py` |
+| `memory/` | checkpointer 创建放进 `agent.py` |
+| `prompts/` | 系统提示词放进 `agent.py` |
+| `scripts/` | 不再保留一次性脚手架脚本 |
 
-MinerU SDK 的核心用法：
-
-```python
-from mineru import MinerU
-
-client = MinerU(token=settings.mineru_api_key.get_secret_value())
-result = client.extract(str(temp_path), ocr=True)
-markdown = result.markdown
-```
-
-MinerU 返回 Markdown 后，再交给 `MarkdownHeaderTextSplitter` 和 `RecursiveCharacterTextSplitter`。这样 PDF 解析不再由项目维护，项目只负责“拿到 Markdown 后如何切分和入库”。
-
-### 5.4 Chat 仍然使用 `ChatOpenAI`
-
-你之前明确要求千问通过 OpenAI 兼容接口接入，因此保留：
-
-```python
-ChatOpenAI(
-    model=settings.qwen_chat_model,
-    api_key=settings.qwen_api_key,
-    base_url=settings.qwen_base_url,
-)
-```
-
-Embedding 用 `DashScopeEmbeddings`，Chat 用 `ChatOpenAI`，两者职责不同，不矛盾。
-
-### 5.5 RAG 链保留高层 API
-
-`rag.py` 中保留：
-
-```python
-combine_docs_chain = create_stuff_documents_chain(chat_model, prompt)
-rag_chain = create_retrieval_chain(retriever, combine_docs_chain)
-```
-
-Agent 的 `retrieve_tourism_knowledge` 工具直接调用 `RAGService.retrieve()`，避免为了“取文档”再让模型生成一次答案。`create_retrieval_chain` 作为独立 RAG 演示入口保留，确保论文中讲的链路在代码里真实存在。
-
-### 5.6 Agent 使用 `create_agent`
-
-```python
-agent = create_agent(
-    model=chat_model,
-    tools=local_tools + mcp_tools,
-    system_prompt=SYSTEM_PROMPT,
-    checkpointer=InMemorySaver(),
-)
-```
-
-多轮对话：
-
-```python
-config = {"configurable": {"thread_id": thread_id}}
-await agent.ainvoke({"messages": [...]}, config=config)
-```
-
-### 5.7 MCP 12306 采用可选启用
-
-已验证可用的开源项目：
-
-- 仓库：`Joooook/12306-mcp`
-- npm 包：`12306-mcp`
-- 传输：stdio
-- 可用工具包括：
-  - `get-current-date`
-  - `get-station-code-by-names`
-  - `get-tickets`
-  - `get-interline-tickets`
-  - `get-train-route-stations`
-
-调用方式：
-
-```python
-client = MultiServerMCPClient({
-    "rail12306": {
-        "transport": "stdio",
-        "command": "npx.cmd",   # Windows
-        "args": ["-y", "12306-mcp"],
-    }
-})
-tools = await client.get_tools()
-```
-
-原因与限制：
-
-- 12306 是第三方实时数据，不能保证任何时候都可用；
-- 启动 MCP 会下载/启动 Node 进程，因此默认关闭；
-- 设置 `MCP_12306_ENABLED=true` 后才合并 MCP 工具；
-- MCP 失败时只记录日志，继续使用本地六个工具；
-- 回答中必须提示“实时数据仅供参考”，并展示查询时间。
-
-### 5.8 MCP 结果的来源处理
-
-现有 Java 和前端只认识五种来源：
-
-```text
-KNOWLEDGE / SPOT / GUIDE / FOOD / RECOMMENDATION
-```
-
-为了不修改 Java 和小程序，MCP 结果暂时登记为 `KNOWLEDGE`，但标题写成：
-
-```text
-12306 实时查询（get-tickets）
-```
-
-并在摘要中附带查询时间。这样：
-
-- 不破坏现有 API；
-- MCP 结果仍可进入 `[S#]` 引用校验；
-- 前端可以正常显示来源卡片；
-- 后续若要扩展 `MCP` 类型，再统一改 Java 和小程序即可。
+这不是“全删”，而是把每个旧目录中真正服务主流程的代码迁到最近的位置。功能没有减少。
 
 ---
 
-## 6. 重构后的实际调用链
+## 5. 与 LangChain 学习资料对齐
 
-### 6.1 AI 问答
+| 学习资料中的知识点 | 最终实现 |
+|---|---|
+| `DashScopeEmbeddings(model="text-embedding-v4")` | `llm.py::create_embeddings()` 直接创建官方类 |
+| `ChatOpenAI` 兼容千问 | `llm.py::create_chat_model()` |
+| `create_agent` | `agent.py::create_tourism_agent()` |
+| 短期记忆 `checkpointer` | `agent.py::create_memory_checkpointer()`，使用 `InMemorySaver` |
+| `create_retrieval_chain` | `rag/service.py::create_rag_chain()` |
+| Milvus 向量库 | `rag/store.py::create_vector_store()` |
+| 工具定义 | `tools/business.py`、`tools/knowledge.py` |
+| MCP 工具 | `tools/mcp.py::load_mcp_tools()` |
+| MinerU 文档解析 | `rag/documents.py::extract_markdown()` |
+| FastAPI 接口 | `main.py` |
 
-```text
-Spring Boot
-  -> POST /internal/v1/ai/chat
-  -> main.py 校验 X-Internal-Token
-  -> chat.py::ChatService.chat()
-  -> 固定问候/危险问题拦截
-  -> agent.py::create_agent 已创建好的 Agent
-  -> 模型决定调用工具
-  -> tools.py 中的六个业务工具
-  -> SpringBootClient 调用 Java 内部接口
-  -> 或 RAGService 调用 Milvus
-  -> agent.py 校验 [S#]
-  -> ChatResult 返回 Spring Boot
-```
-
-### 6.2 文档索引
-
-```text
-Spring Boot
-  -> POST /internal/v1/ai/index/jobs
-  -> indexer.py 创建后台任务
-  -> 下载 OSS 临时签名文件
-  -> MinerU / 文本读取
-  -> MarkdownHeaderTextSplitter + RecursiveCharacterTextSplitter
-  -> DashScopeEmbeddings
-  -> Milvus add_documents
-  -> 分批回写 Java knowledge_chunk 元数据
-  -> 查询任务状态
-```
-
-### 6.3 MCP 12306
-
-```text
-Agent
-  -> 12306 MCP Tool
-  -> npx -y 12306-mcp 子进程
-  -> 12306 官方查询接口
-  -> 工具包装层登记来源和查询时间
-  -> Agent 生成回答
-```
+这里故意没有使用 `AgentExecutor`、手写 Prompt 拼接、手写 HTTP 调用 Qwen，也没有自己实现 Embedding。能交给官方高层 API 的地方都交给高层 API。
 
 ---
 
-## 7. 文件级职责表
+## 6. 必须保留的功能清单
 
-| 文件 | 职责 | 预计代码量 |
+### 6.1 对外能力
+
+- AI 问答；
+- 多轮对话；
+- 来源卡片；
+- 资料不足时返回结构化降级结果；
+- 知识库索引任务；
+- 查询索引进度；
+- 删除文档向量；
+- 健康检查。
+
+### 6.2 Agent 本地工具
+
+- `search_scenic_spots`；
+- `get_spot_detail`；
+- `search_travel_guides`；
+- `search_foods`；
+- `retrieve_tourism_knowledge`；
+- `recommend_spots`。
+
+### 6.3 RAG 能力
+
+- TXT/Markdown 直接解析；
+- PDF/DOCX/图片使用 MinerU；
+- Markdown 标题切分 + 长度切分；
+- `DashScopeEmbeddings` 写入 Milvus；
+- `create_retrieval_chain` 检索；
+- 检索来源回填到 `SourceItem`；
+- 更换 Embedding 时通过 collection 版本隔离。
+
+### 6.4 会话能力
+
+- Java 生成 `threadId`；
+- Python 用 `threadId` 作为 LangGraph `configurable.thread_id`；
+- `InMemorySaver` 保存图状态；
+- checkpoint 丢失时用 Java 传来的最近 6–10 条历史恢复。
+
+### 6.5 MCP 能力
+
+- 12306 查询默认关闭；
+- 开启时通过 `MultiServerMCPClient` 加载；
+- 每个 MCP 工具都有超时和调用预算；
+- MCP 结果和本地工具一样登记来源；
+- MCP 失败不能拖垮本地 RAG 和业务工具。
+
+---
+
+## 7. 为什么不再拆更多文件
+
+当前主要文件规模如下（包含中文注释，行数只是粗略参考）：
+
+| 文件 | 主要职责 | 大致规模 |
 |---|---|---:|
-| `app/config.py` | 环境变量、常量、日志、ULID、内部 token | 150 行左右 |
-| `app/errors.py` | 业务异常与错误码 | 100 行左右 |
-| `app/schemas.py` | 所有请求/响应模型 | 180 行左右 |
-| `app/llm.py` | ChatOpenAI 和 DashScopeEmbeddings | 50 行左右 |
-| `app/rag.py` | MinerU、切分、Milvus、检索、RAG 链 | 430 行左右（含注释） |
-| `app/springboot.py` | Java 内部接口客户端 | 180 行左右 |
-| `app/tools.py` | 六个工具、工具预算、MCP wrapper | 640 行左右（工具部分可逐个读） |
-| `app/agent.py` | prompt、create_agent、来源和引用校验 | 270 行左右 |
-| `app/chat.py` | 聊天主流程、固定回答、checkpoint 重置 | 150 行左右 |
-| `app/indexer.py` | 下载、任务状态、索引流水线 | 390 行左右 |
-| `app/runtime.py` | 启动装配 | 100 行左右 |
-| `app/main.py` | FastAPI 入口和 7 个接口 | 220 行左右 |
+| `agent.py` | create_agent、提示词、引用校验 | 约 270 行 |
+| `main.py` | FastAPI 路由和异常处理 | 约 280 行 |
+| `tools/business.py` | 五个业务工具 | 约 260 行 |
+| `tools/context.py` | 上下文和来源登记 | 约 220 行 |
+| `schemas.py` | 全部接口模型 | 约 230 行 |
+| `indexer/pipeline.py` | 一条完整索引流水线 | 约 170 行 |
+| `indexer/jobs.py` | 任务状态和幂等 | 约 140 行 |
 
-全部文件合计约 3100 行，其中包含大量面向初学者的中文注释。行数不是唯一目标：更重要的是不再有 13 个子包和层层包装，核心调用链可以直接顺着文件阅读。
+这些文件确实有几百行，但它们都是**围绕一个概念连续阅读**的代码。继续把它们拆成 `agent_factory.py`、`prompt_builder.py`、`source_validator.py`、`job_store.py`、`job_runner.py`，会让读者多跳转 5–6 次，却不会让逻辑更简单。
 
----
+更合适的优化不是继续拆文件，而是：
 
-## 8. 13 个包的去向
+1. 先读 `CODE-GUIDE.md` 中有编号的章节；
+2. 每个文件只抓一个入口函数（例如 `create_tourism_agent()`、`RAGService.retrieve()`、`IndexPipeline.run()`）；
+3. 用断点跟着一条真实请求走，不要从第一行读到最后一行；
+4. 只有当某个文件出现第二个独立业务概念时，才考虑再拆一个包。
 
-| 原目录 | 处理方式 | 去向 |
-|---|---|---|
-| `agents/` | 合并 | `agent.py` |
-| `api/` | 合并 | `main.py` |
-| `chains/` | 合并 | `rag.py` + `agent.py` |
-| `core/` | 合并 | `config.py` + `errors.py` |
-| `ingestion/` | 合并 | `indexer.py` |
-| `integrations/` | 拆分精简 | `llm.py` + `springboot.py` + `rag.py` |
-| `memory/` | 删除包装 | 直接 `InMemorySaver()` |
-| `prompts/` | 合并 | `agent.py` |
-| `rag/` | 合并 | `rag.py` |
-| `schemas/` | 合并 | `schemas.py` |
-| `scripts/` | 删除 | 不再保留兼容旧 API 的脚本 |
-| `services/` | 合并 | `chat.py` + `indexer.py` |
-| `tools/` | 合并 | `tools.py` |
+对本科毕设来说，**当前 3 个包是阅读成本和文件长度之间的平衡点**。再拆是过度设计，全部平铺又会重新产生几百行的单文件。
 
 ---
 
-## 9. 明确不做的企业化功能
+## 8. 明确不做的企业化功能
 
-本次继续不引入：
+本轮不引入：
 
-- Redis 缓存或 Redis checkpointer；
-- HMAC 签名、时间窗、防重放；
-- 多 Agent 协作；
-- Middleware 链；
-- Runtime Context 框架；
-- 复杂任务队列；
-- 数据库保存索引任务；
-- 多租户；
-- 生产级限流；
-- 模型结果缓存。
+- Redis 任务队列；
+- 消息队列；
+- 多实例分布式锁；
+- 数据库任务表；
+- HMAC、时间窗和防重放；
+- 多级缓存；
+- 熔断、限流和服务注册中心；
+- 为每个类写接口再写实现；
+- 为了“看起来分层”而创建空目录。
 
-这些能力可以学习和了解，但没有必要塞进一个单机演示系统。
-
----
-
-## 10. 迁移步骤
-
-1. 写本文档；
-2. 新增平铺模块，不先删除旧目录；
-3. 修改 `runtime.py`，让新模块完成原有装配；
-4. 修改测试 import；
-5. 运行 `ruff`、`mypy`、`pytest`；
-6. 验证 OpenAPI 仍包含全部内部接口；
-7. 验证资料不足、引用校验、多轮对话和索引任务；
-8. 验证 MinerU 文本路径和 DashScopeEmbeddings 初始化；
-9. 删除旧子包；
-10. 更新 README 和 CODE-GUIDE。
+单机答辩需要的是：能启动、能演示、能解释、能定位错误。任务状态放进程内、checkpoint 放 `InMemorySaver`，都是明确写进文档的取舍，不是隐藏缺陷。
 
 ---
 
-## 11. 验收标准
+## 9. 验收标准
 
-- [ ] `app/` 下不再有 13 个子包；
-- [ ] 所有核心文件可直接打开阅读；
-- [ ] `create_agent` 仍然用于 Agent；
-- [ ] `InMemorySaver` 仍然用于多轮记忆；
-- [ ] `create_retrieval_chain` 仍然存在；
-- [ ] Embedding 使用 `DashScopeEmbeddings`；
-- [ ] Chat 使用 `ChatOpenAI`；
-- [ ] PDF/DOCX 解析使用 MinerU；
-- [ ] 六个本地工具全部存在；
-- [ ] MCP 12306 可选启用，失败可降级；
-- [ ] 引用校验和资料不足逻辑保留；
-- [ ] 内部 `X-Internal-Token` 鉴权保留；
-- [ ] 原有七个内部接口路径不变；
-- [ ] 测试和静态检查通过。
+```powershell
+cd D:\luoyang-smart-tourism\ai-service
+uv run ruff format app tests
+uv run ruff check app tests
+uv run mypy app
+uv run pytest -q
+```
+
+同时人工确认：
+
+- `app/` 下只有 `tools/`、`rag/`、`indexer/` 三个业务包；
+- `tools/__init__.py` 能导出 `LOCAL_TOOLS`；
+- `rag/__init__.py` 能导出 `RAGService` 和 `create_vector_store`；
+- `indexer/__init__.py` 能导出 `IndexService`；
+- `/health/ready` 能显示 Milvus 和 Agent 状态；
+- `/docs` 仍能看到 7 个内部接口；
+- MCP 默认关闭，开启后 `get-tickets` 可以加载；
+- 索引任务能完成 `QUEUED -> RUNNING -> SUCCEEDED`。
 
 ---
 
-## 12. 给答辩时的解释
+## 10. 答辩时的一句话解释
 
-如果老师问“你为什么这样拆分”，可以这样回答：
-
-> 我最初参考企业项目做了较细的分层，但在实际开发中发现，毕业设计的核心是展示 RAG 和 Agent 的完整闭环，而不是模拟大型团队协作。因此我把同一业务链路上的代码合并到平级模块：`rag.py` 负责知识入库和检索，`agent.py` 负责 Agent 编排和来源校验，`tools.py` 负责业务工具，`chat.py` 负责一次问答。这样既保留了 LangChain 的官方高层 API，也能让我独立解释每一行的作用。
-
-这个回答比“为了简单所以删了很多”更准确，因为功能没有被删除，删除的是与单机毕设不匹配的抽象层。
+> 我最初参考企业项目做了 13 个包，但毕业设计的核心是展示 RAG 和 Agent 的完整闭环，而不是模拟大型团队协作。因此最终只保留 `tools`、`rag`、`indexer` 三个确实需要多文件协作的包，其余模块平铺。这样既保留了工程边界，也能让我沿着一条请求独立讲清楚每个文件的作用。

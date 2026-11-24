@@ -2,7 +2,7 @@
 
 > 阅读对象：已经会基础 Python，能看懂函数、类、异步 `async/await` 的初学者。
 > 阅读目标：读完后你能从一次 HTTP 请求开始，讲清楚 Agent、工具、RAG、Milvus、MinerU、checkpointer 和索引任务分别做了什么。
-> 重要：本文解释当前 `app/` 下的平铺代码。旧的 `agents/`、`chains/`、`core/`、`rag/`、`schemas/`、`tools/` 等子包已经移除，不要再按旧目录阅读。
+> 当前结构：`app/` 下只保留 `tools/`、`rag/`、`indexer/` 三个有明确边界的包，其余模块继续平铺。旧的 `agents/`、`chains/`、`core/`、`services/`、`integrations/` 等目录已经移除。
 
 ---
 
@@ -40,31 +40,44 @@
 
 ---
 
-## 1. 一个文件一个概念
+## 1. 三个包 + 平铺文件
 
 ```text
 app/
-├─ config.py       配置和常量：程序从哪里读 Key、端口、超时
-├─ errors.py       可预期错误：参数错、依赖不可用、内部 token 错
-├─ schemas.py      HTTP 协议：请求和响应到底长什么样
-├─ llm.py          模型：千问聊天 + 千问向量
-├─ rag.py          RAG：MinerU、切分、Milvus、检索链
-├─ springboot.py   反向调用 Java 内部接口
-├─ tools.py        模型可以调用的函数和工具预算
-├─ agent.py        create_agent、提示词、引用校验
-├─ chat.py         一次问答的主流程
-├─ indexer.py      文档入 Milvus 的后台任务
-├─ runtime.py      启动时把所有对象组装起来
-└─ main.py         FastAPI 的 7 个接口
+├─ config.py          配置和常量：程序从哪里读 Key、端口、超时
+├─ errors.py          可预期错误：参数错、依赖不可用、内部 token 错
+├─ schemas.py         HTTP 协议：请求和响应到底长什么样
+├─ llm.py             模型：千问聊天 + 千问向量
+├─ springboot.py      反向调用 Java 内部接口
+├─ agent.py           create_agent、提示词、引用校验
+├─ chat.py            一次问答的主流程
+├─ runtime.py         启动时把所有对象组装起来
+├─ main.py            FastAPI 的 7 个接口
+├─ tools/             工具包
+│  ├─ context.py      RequestContext、预算、来源登记
+│  ├─ business.py     景点/攻略/美食/推荐工具
+│  ├─ knowledge.py    RAG 工具
+│  └─ mcp.py          12306 MCP
+├─ rag/               RAG 包
+│  ├─ documents.py    MinerU、文本读取、切分
+│  ├─ store.py        Milvus 连接和 collection
+│  └─ service.py      retrieve + create_retrieval_chain
+└─ indexer/           索引包
+   ├─ downloader.py   OSS 临时 URL 下载
+   ├─ pipeline.py     一条索引流水线
+   ├─ jobs.py         任务状态、幂等、后台调度
+   └─ service.py      给 FastAPI 的索引服务门面
 ```
 
 阅读顺序建议：
 
 ```text
-config -> schemas -> llm -> rag -> springboot -> tools -> agent -> chat -> indexer -> runtime -> main
+config -> schemas -> llm -> rag/documents.py -> rag/store.py -> rag/service.py
+  -> springboot.py -> tools/context.py -> tools/business.py -> tools/knowledge.py
+  -> tools/mcp.py -> agent.py -> chat.py -> indexer/ -> runtime.py -> main.py
 ```
 
-不要从 `main.py` 开始逐行啃。`main.py` 只是 HTTP 入口，真正的业务在 `chat.py` 和 `indexer.py`。
+不要从 `main.py` 开始逐行啃。`main.py` 只是 HTTP 入口，真正的业务在 `chat.py`、`tools/` 和 `indexer/`。第一次阅读可以只追一条链路：**`chat.py -> agent.py -> tools/knowledge.py -> rag/service.py`**。
 
 ---
 
@@ -396,9 +409,9 @@ return DashScopeEmbeddings(
 
 ---
 
-## 6. `rag.py`：RAG 的全部关键步骤
+## 6. `rag/`：RAG 的全部关键步骤
 
-这个文件负责四件事：
+这个包负责四件事，内部按职责拆成三个文件：`documents.py` 负责解析和切分，`store.py` 负责 Milvus，`service.py` 负责检索链。
 
 ```text
 文档解析 -> 文本切分 -> 向量存取 -> 检索/回答链
@@ -636,7 +649,9 @@ POST /internal/v1/ai/knowledge/chunks/batch
 
 ---
 
-## 8. `tools.py`：Agent 的工具箱
+## 8. `tools/`：Agent 的工具箱
+
+本包按职责拆成四个文件：`context.py` 管请求上下文和预算，`business.py` 放五个 Java 业务工具，`knowledge.py` 放 RAG 工具，`mcp.py` 放 12306 MCP。`__init__.py` 只汇总 `LOCAL_TOOLS`。
 
 ### 8.1 `RequestContext`
 
@@ -696,7 +711,7 @@ def reserve_tool_call(self, name: str) -> bool:
 每个工具的固定结构：
 
 ```python
-context, error = _begin_tool("工具名")
+context, error = begin_tool("工具名")
 if error is not None:
     return error
 try:
@@ -981,7 +996,9 @@ finally:
 
 ---
 
-## 11. `indexer.py`：知识库入库
+## 11. `indexer/`：知识库入库
+
+本包按阶段拆成四个文件：`downloader.py` 下载文件，`pipeline.py` 执行入库，`jobs.py` 维护任务状态，`service.py` 对 FastAPI 暴露稳定入口。
 
 ### 11.1 为什么用后台任务
 
@@ -1528,7 +1545,7 @@ async def nearby_parking(self, spot_id: str) -> Any:
     )
 ```
 
-### 第三步：在 `tools.py` 增加输入模型和工具
+### 第三步：在 `tools/business.py` 增加输入模型和工具
 
 ```python
 class ParkingInput(BaseModel):
@@ -1536,7 +1553,7 @@ class ParkingInput(BaseModel):
 
 @tool("nearby_parking", args_schema=ParkingInput)
 async def nearby_parking(spot_id: str) -> dict[str, Any]:
-    context, error = _begin_tool("nearby_parking")
+    context, error = begin_tool("nearby_parking")
     if error:
         return error
     response = await context.springboot_client.nearby_parking(spot_id)
@@ -1588,8 +1605,8 @@ LOCAL_TOOLS = [..., nearby_parking]
 main.py
   -> chat.py
     -> agent.py
-      -> tools.py
-        -> springboot.py / rag.py
+      -> tools/business.py / tools/knowledge.py
+        -> springboot.py / rag/service.py
           -> Milvus / Spring Boot / 12306 MCP
     -> agent.py 引用校验
   -> ChatResult
@@ -1605,8 +1622,8 @@ main.py
 2. `config.py`；
 3. `schemas.py`；
 4. `llm.py`；
-5. `rag.py` 中 `split_markdown` 和 `RAGService.retrieve`；
-6. `tools.py` 中 `RequestContext` 和 `retrieve_tourism_knowledge`；
+5. `rag/documents.py` 中 `split_markdown`，以及 `rag/service.py` 中 `RAGService.retrieve`；
+6. `tools/context.py` 中 `RequestContext`，以及 `tools/knowledge.py` 中 `retrieve_tourism_knowledge`；
 7. `agent.py` 中 `create_tourism_agent`；
 8. `chat.py` 中 `ChatService.chat`。
 
@@ -1617,10 +1634,10 @@ main.py
 - `main.py::chat`：确认 Java 请求是否到达；
 - `chat.py::ChatService.chat`：确认 Guard 和 threadId；
 - `agent.py::create_tourism_agent`：确认工具列表；
-- `tools.py::_begin_tool`：确认工具预算；
-- `tools.py::RAG 工具`：确认检索结果；
+- `tools/context.py::begin_tool`：确认工具预算；
+- `tools/knowledge.py::retrieve_tourism_knowledge`：确认检索结果；
 - `agent.py::finalize_grounded_result`：确认引用是否通过；
-- `indexer.py::IndexPipeline.run`：确认每个索引进度。
+- `indexer/pipeline.py::IndexPipeline.run`：确认每个索引进度。
 
 ### 答辩时建议展示
 

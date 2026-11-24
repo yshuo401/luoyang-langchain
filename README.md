@@ -1,6 +1,6 @@
 # AI 服务（学习友好版）
 
-> 面向本科毕业设计：保留 AI 问答、RAG、Milvus、Agent、MinerU、MCP 和索引任务，但不再在 `app` 下拆 13 个子包。
+> 面向本科毕业设计：保留 AI 问答、RAG、Milvus、Agent、MinerU、MCP 和索引任务，但只保留 **3 个有明确边界的子包**，其余文件继续平铺。
 > 为什么这样改见 [LEARNER-REFACTOR.md](LEARNER-REFACTOR.md)，逐文件讲解见 [CODE-GUIDE.md](CODE-GUIDE.md)。
 
 ## 1. 一句话理解
@@ -16,23 +16,37 @@ Spring Boot（唯一业务入口）
 
 FastAPI 不负责公网 JWT、业务 MySQL 和 OSS 权限。景点、攻略、美食、推荐和聊天记录的最终事实都在 Java/MySQL。
 
-## 2. 平铺目录
+## 2. 目录结构：3 个包 + 平铺文件
 
 ```text
 ai-service/
 ├─ app/
-│  ├─ config.py          环境变量、常量、日志、ULID、内部 token
-│  ├─ errors.py          统一业务异常
-│  ├─ schemas.py         Pydantic 请求/响应模型
-│  ├─ llm.py             ChatOpenAI + DashScopeEmbeddings
-│  ├─ rag.py             MinerU、切分、Milvus、create_retrieval_chain
-│  ├─ springboot.py      Java 内部接口客户端
-│  ├─ tools.py           六个本地工具、工具预算、MCP 包装
-│  ├─ agent.py           create_agent、系统提示词、引用校验
-│  ├─ chat.py            一次问答的主流程
-│  ├─ indexer.py         下载、索引任务、MinerU 入库流水线
-│  ├─ runtime.py         启动时组装依赖
-│  └─ main.py            FastAPI 路由和异常处理
+│  ├─ config.py              环境变量、常量、日志、ULID、内部 token
+│  ├─ errors.py              统一业务异常
+│  ├─ schemas.py             Pydantic 请求/响应模型
+│  ├─ llm.py                 ChatOpenAI + DashScopeEmbeddings
+│  ├─ springboot.py          Java 内部接口客户端
+│  ├─ agent.py               create_agent、系统提示词、引用校验
+│  ├─ chat.py                一次问答的主流程
+│  ├─ runtime.py             启动时组装依赖
+│  ├─ main.py                FastAPI 路由和异常处理
+│  ├─ tools/                 # 模型可以调用的工具
+│  │  ├─ context.py          请求上下文、工具预算、来源登记
+│  │  ├─ business.py         景点/攻略/美食/推荐业务工具
+│  │  ├─ knowledge.py        RAG 知识库检索工具
+│  │  ├─ mcp.py              12306 MCP 工具加载
+│  │  └─ __init__.py         统一导出 LOCAL_TOOLS
+│  ├─ rag/                   # RAG 的完整链路
+│  │  ├─ documents.py        TXT/Markdown + MinerU 解析与切分
+│  │  ├─ store.py            Milvus 连接与 collection
+│  │  ├─ service.py          retrieve + create_retrieval_chain
+│  │  └─ __init__.py         统一导出 RAG API
+│  └─ indexer/               # 知识库索引任务
+│     ├─ downloader.py       OSS 临时 URL 下载
+│     ├─ pipeline.py         下载 -> 解析 -> 切分 -> Milvus -> Java
+│     ├─ jobs.py             进程内任务表、幂等、状态
+│     ├─ service.py          给 FastAPI 的索引服务门面
+│     └─ __init__.py         统一导出索引 API
 ├─ tests/
 ├─ .env
 ├─ .env.example
@@ -41,7 +55,13 @@ ai-service/
 └─ LEARNER-REFACTOR.md
 ```
 
-没有 `agents/`、`chains/`、`core/`、`services/`、`rag/`、`schemas/` 等子包。
+### 为什么只有这 3 个包？
+
+- `tools/`：工具数量多，而且每个工具都有输入模型、参数校验和来源登记，放在一起最适合按业务阅读；
+- `rag/`：文档解析、向量库、检索链是三个不同技术动作，文件分开后不会互相覆盖；
+- `indexer/`：下载、流水线、任务状态、对外门面是四个独立职责，分开后一次索引流程很清楚。
+
+其余内容继续平铺在 `app/` 下。**不恢复** `api/`、`core/`、`services/`、`integrations/`、`chains/`、`memory/`、`prompts/`、`schemas/` 等多个层级的旧结构。
 
 ## 3. 启动
 
@@ -117,6 +137,7 @@ X-Internal-Token: <INTERNAL_TOKEN>
 ## 7. 测试
 
 ```powershell
+uv run ruff format app tests
 uv run ruff check app tests
 uv run mypy app
 uv run pytest -q
