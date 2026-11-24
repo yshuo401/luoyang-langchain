@@ -78,7 +78,7 @@ async def build_runtime(settings: Settings) -> ApplicationRuntime:
             downloader=DocumentDownloader(settings),
             settings=settings,
         )
-        index_service = IndexService(IndexJobManager(pipeline, settings), pipeline)
+        index_service = IndexService(IndexJobManager(pipeline), pipeline)
 
     mcp_tools = []
     try:

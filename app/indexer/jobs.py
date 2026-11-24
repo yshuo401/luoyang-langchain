@@ -11,7 +11,7 @@ import hashlib
 import json
 from datetime import UTC, datetime
 
-from app.config import Settings, get_settings, new_ulid
+from app.config import new_ulid
 from app.errors import ConflictError
 from app.indexer.pipeline import IndexPipeline
 from app.schemas import IndexJobSubmitRequest, IndexJobView
@@ -20,9 +20,8 @@ from app.schemas import IndexJobSubmitRequest, IndexJobView
 class IndexJobManager:
     """维护任务状态、幂等键，并串行调度索引流水线。"""
 
-    def __init__(self, pipeline: IndexPipeline, settings: Settings | None = None) -> None:
+    def __init__(self, pipeline: IndexPipeline) -> None:
         self.pipeline = pipeline
-        self.settings = settings or get_settings()
         self._jobs: dict[str, IndexJobView] = {}
         self._idempotency: dict[str, tuple[str, str]] = {}
         self._latest_versions: dict[str, int] = {}
